@@ -1,0 +1,285 @@
+#!/bin/bash
+
+__Author="Jerren Saunders"
+__Version=24.10.1
+__ScriptName=$(basename "$0") # File name with extension
+__AppDir=$(dirname "$0") # Path where script is stored
+__AppName=${__ScriptName%.*} # File name without extension
+__origArgs=$* # Capture all of the original arguments
+
+# NOTE: Test with the command
+#  touch test.txt && trash test.txt && ll ~/.recycle-bin/
+
+# IDEA: Support arguments to 
+#  - List contents of the recycle bin (with filters)
+#  - Purge files in the recycle bin (change time was updated to the time the file was deleted)
+#    Use this time to remove any files older than a specified number of days (default to 7)
+#    Test cmd: ls -1tc (list files, sorted by change time, newest at top)
+#    age=6; find . -type f -ctime "+${age}" # More than 6 days ago
+
+#  Default Settings
+DEFAULT_AGE=7
+VERBOSE=0
+DRYRUN=false # Not Implemented!
+
+
+function print_usage() {
+    includeAppInfo=${1}
+    cat <<EOT
+
+This script will move the specified file(s) or folders to a trash folder instead of
+immediately deleting the file.
+
+USAGE:
+    ${__ScriptName} [list [age] | purge [age] | help | <path> [<path>...]]
+        list    List files that are in the trash and older than the given number of days
+                Default age is ${DEFAULT_AGE} days
+        purge   Purge files older than the specified number of days from the trash. Default
+                age is ${DEFAULT_AGE} days
+        dir     Return the path to the trash directory
+        help    Show usage
+        <path>  One or more paths to files and/or directories that should be moved to 
+                the trash.  Patterns supported by 'mv' are supported    
+
+EOT
+
+     if [[ ${includeAppInfo} ]]; then 
+        cat <<EOT
+    By: ${__Author}
+    Version: ${__Version}
+EOT
+    fi
+
+}
+
+
+# Options
+FILE_DELIM="___TRASHED_ON__"
+OLD_MARKER="*"
+OLD_COLOR="31;3"
+
+
+# Prints log message to the terminal
+#  <int> lvl - Print Level: Only print this message if the VERSBOSE level is greater than or equal to this
+#  <string> msg - Message to print
+function log() {
+    local lvl=$1
+    local msg=$2
+
+    if (( lvl <= VERBOSE )); then
+        echo "$msg"
+    fi
+}
+
+# Either runs the command or prints the command that would be executed if DRYRUN is 'true'
+#  <cmd> cmd - Command to execute or print
+function runCMD() {
+    local cmd="$*"
+
+    if [[ "${DRYRUN}" == "true" ]]; then 
+        echo "CMD: ${cmd}"
+    else 
+        eval "${cmd}"
+    fi
+}
+
+
+# Determine the path to the trash can
+#  Set the variable `trash_directory`
+function set_trash_directory_path() {
+    if [ -z "$XDG_DATA_HOME" ] ; then
+        xdg_trash_directory=$(realpath ~/.local/share/Trash/)
+    else
+        xdg_trash_directory=$(realpath "${XDG_DATA_HOME}/Trash/")
+    fi
+
+    gio_command_exists=0
+    
+    # Check return code to determine if the gio commmand exist
+    if eval command -v gio > /dev/null 2>&1; then
+        gio_command_exists=1
+    fi
+
+    host_implements_trash_specification=0
+    if [[ -d "${xdg_trash_directory}" ]] && (( gio_command_exists == 1 )) ; then
+        # OS implements the trash specification.
+        host_implements_trash_specification=1
+        trash_directory="${xdg_trash_directory}"
+    else
+        # Attempt to use a custom trash directory.
+        trash_directory=$(realpath ~/.recycle-bin)
+        if [[ -e "${trash_directory}" ]] ; then
+            # It already exists.
+            if [[ ! -d "${trash_directory}" ]] ; then
+                # But is not a directory, so abort.
+                echo "Error: ${trash_directory} exists, but is not a directory."
+                exit 1
+            fi
+        else
+            # It does not exists, so create it.
+            mkdir "${trash_directory}"
+            log 1 "Created directory ${trash_directory}"
+        fi
+    fi
+
+    log 2 "Trash Directory identified as: ${trash_directory}"
+}
+
+
+
+# Function to retrieve a list of files with ctime older than specified days
+#  days - Age of files in days.  If not provided, will list all files in the trash directory
+list_old_files() {
+    local directory=${trash_directory}
+    local days=${1:-$DEFAULT_AGE}
+    local showOldOnly=${2:-false}
+    local -r current_time=$(date +%s)
+    local age_in_seconds=$((days * 24 * 60 * 60))
+    
+    log 2 "Listing files in '${directory}'.  Those older than ${days} days are marked"
+    printf "   %-30s %s\n" "Time Deleted" "File"
+    echo "  ------------------------------------------------------------------------------"
+    find "$directory" -mindepth 1 -maxdepth 1 -printf '%C@ %p\n' | while read ctime file_path; do
+        local file_age=$((current_time - ${ctime%.*}))
+        
+        # Mark directories with a trailing '/' char
+        local type_mark=""
+        if [ -d "${file_path}" ]; then
+            type_mark="/"
+        fi
+
+        if [ $file_age -gt $age_in_seconds ]; then
+            # Mark the file since it is older than the specified number of days
+            echo "${file_path}" | awk \
+                -v color="\033[0;${OLD_COLOR}m" \
+                -v reset="\033[0m" \
+                -v marksymbol="${OLD_MARKER}" \
+                -v trashdir="${directory}" \
+                -v typemark="${type_mark}" \
+                -F "${FILE_DELIM}" \
+                '{ 
+                    sub(trashdir "/", "", $1); # Show relative path
+                    printf color "  %-30s %s" typemark reset " " marksymbol "\n", $2, $1
+                }'
+        elif [ "$showOldOnly" = "false" ]; then
+            echo "${file_path}" | awk \
+                -v trashdir="${directory}" \
+                -v typemark="${type_mark}" \
+                -F "${FILE_DELIM}" \
+                '{ 
+                    sub(trashdir "/", "", $1); # Show relative path
+                    printf "  %-30s %s" typemark "\n", $2, $1
+                }'
+        fi
+    done
+}
+
+# Function to delete files with ctime older than specified days
+#  days - Age of files in days.  If not provided, will delete all files in the trash directory
+delete_old_files() {
+    local directory=${trash_directory}
+    local days=${1:-$DEFAULT_AGE}
+    
+    # If verbose is enabled, then print the file list
+    if [ "${VERBOSE}" -gt 0 ] || [ "$DRYRUN" = true ]; then
+        log 0 "The following files ${OLD_MARKER} will be purged:"
+        list_old_files "$days" true
+    elif [ "$DRYRUN" = false ]; then
+        log 1 "Removing files in '${directory}' that are older than ${days} days"
+        find "$directory" -type f -ctime +"$((days - 1))" -exec rm -f {} +
+    fi
+}
+
+# HACK: Test Code 
+# list_old_files 2
+# exit
+
+function trash_paths() {
+    cmd_time="$(date '+%Y%m%d-%H%M%S.%3N')"
+
+    # Deal with all filenames (a concept that covers names of both files and directories) given as arguments.
+    for file in "$@" ; do
+        file_to_be_trashed=$(realpath -- "${file}")
+        file_basename=$(basename -- "${file_to_be_trashed}")
+        if [[ ! -e ${file_to_be_trashed} ]] ; then
+            log 1 "does not exist:   ${file_to_be_trashed}"
+        elif [[ "${file_to_be_trashed}" == "${trash_directory}"* ]] ; then
+            log 1 "already in trash: ${file_to_be_trashed}"
+        else
+            # ${file_to_be_trashed} exists and is not yet in the trash directory, so move it there.
+            if (( host_implements_trash_specification == 1 )) ; then
+                gio trash "${file_to_be_trashed}"
+            else
+                # IDEA: Modify this to create two files in the trashcan:
+                #  - One for the file/direct that was moved
+                #  - Second to be a text file that is the origin location
+                #  This can be leveraged to provide a `restore` command that puts the file back in the original location
+
+                # IDEA: Origin file/attribute can contain the: timestamp, command, PWD, file(s) effected
+
+                # Move the file to the custom trash directory, with a new name that
+                # appends a millisecond-resolution timestamp to the original.
+                head="${trash_directory}/${file_basename}${FILE_DELIM}"
+
+                move_file_to="${head}${cmd_time}"
+                while [[ -e "${move_file_to}" ]] ; do
+                    # Generate a new name with a new timestamp, as the previously
+                    # generated one denoted an existing file or directory. It's very
+                    # unlikely that this loop needs to be executed even once.
+                    move_file_to="${head}${cmd_time}"
+                done
+
+                # There is no file or directory named ${move_file_to}, so
+                # we can use it as the move target.
+                /bin/mv "${file_to_be_trashed}" "${move_file_to}"
+            fi
+            log 1 "moved to trash:   ${file_to_be_trashed}"
+        fi
+    done
+}
+
+function main() {
+    if [[ "${DRYRUN}" == "true" ]]; then echo "---- THIS IS A DRYRUN! ----"; fi
+
+    set_trash_directory_path
+
+    case "$1" in
+        list|ls)
+            list_old_files "$2"
+            ;;
+
+        purge|rm)
+            delete_old_files "$2"
+            ;;
+
+        dir|directory|path)
+            echo "${trash_directory}"
+            ;;
+
+        help)
+            print_usage true
+            exit 0
+            ;;
+        *)
+            trash_paths "$@"
+            ;;
+    esac
+}
+
+
+# Call main function and pass all (remaining) CL args
+main "$@"
+exit 0
+
+
+
+######################################
+###  Change History
+######################################
+# shellcheck disable=SC2317  # Don't warn about unreachable commands in this function
+/dev/null <<EOT
+ - 24.9.27:     Initial Creation
+ - 24.9.30:     Added methods to list and delete files from the trash directory (not accessible via args yet)
+ - 24.10.1:     Added 'list', 'purge', and 'help' commands
+                Added 'dir' command
+EOT
