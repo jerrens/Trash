@@ -38,6 +38,7 @@ USAGE:
                 age is ${DEFAULT_AGE} days
         dir     Return the path to the trash directory
         help    Show usage
+        version Show version number
         <path>  One or more paths to files and/or directories that should be moved to 
                 the trash.  Patterns supported by 'mv' are supported    
 
@@ -260,6 +261,12 @@ function main() {
             print_usage true
             exit 0
             ;;
+
+        version|ver)
+            echo "${__Version}"
+            exit 0
+            ;;
+
         *)
             trash_paths "$@"
             ;;
@@ -278,8 +285,10 @@ exit 0
 ######################################
 # shellcheck disable=SC2317  # Don't warn about unreachable commands in this function
 /dev/null <<EOT
- - 24.9.27:     Initial Creation
- - 24.9.30:     Added methods to list and delete files from the trash directory (not accessible via args yet)
+ - 24.10.2:     Fixed Purge command to include directoris
+                Added 'version' command
  - 24.10.1:     Added 'list', 'purge', and 'help' commands
                 Added 'dir' command
+ - 24.9.30:     Added methods to list and delete files from the trash directory (not accessible via args yet)
+ - 24.9.27:     Initial Creation
 EOT
