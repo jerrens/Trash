@@ -16,6 +16,15 @@ __origArgs=$* # Capture all of the original arguments
 #    Use this time to remove any files older than a specified number of days (default to 7)
 #    Test cmd: ls -1tc (list files, sorted by change time, newest at top)
 #    age=6; find . -type f -ctime "+${age}" # More than 6 days ago
+#  - Restore files from the recycle bin to their original location
+#    - If a file or folder exist at the original location, then should we restore with a 'restored', move the existing to a '.old', or prompt the user?
+#    - Should provide a CL arg to specify the desired action other than default
+#  - Compress files and folders in the recycle bin 
+#     - should run as a thread in the background 
+#     - should provide some locking mechanism to either block if restoring while compression is in progress
+#       or compress to a temp file and if restored before completed, will need to stop and clean up temp file
+#  - Add ANSI color to dry-run output
+
 
 #  Default Settings
 DEFAULT_AGE=7
@@ -74,15 +83,15 @@ function log() {
 
 # Either runs the command or prints the command that would be executed if DRYRUN is 'true'
 #  <cmd> cmd - Command to execute or print
-function runCMD() {
-    local cmd="$*"
+# function runCMD() {
+#     local cmd="$*"
 
-    if [[ "${DRYRUN}" == "true" ]]; then 
-        echo "CMD: ${cmd}"
-    else 
-        eval "${cmd}"
-    fi
-}
+#     if [[ "${DRYRUN}" == "true" ]]; then 
+#         echo "CMD: ${cmd}"
+#     else 
+#         eval "${cmd}"
+#     fi
+# }
 
 
 # Determine the path to the trash can
