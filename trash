@@ -1,7 +1,7 @@
 #!/bin/bash
 
 __Author="Jerren Saunders"
-__Version=24.10.2
+__Version=24.11.16
 __ScriptName=$(basename "$0") # File name with extension
 __AppDir=$(dirname "$0") # Path where script is stored
 __AppName=${__ScriptName%.*} # File name without extension
@@ -10,7 +10,7 @@ __origArgs=$* # Capture all of the original arguments
 # NOTE: Test with the command
 #  touch test.txt && trash test.txt && ll ~/.recycle-bin/
 
-# IDEA: Support arguments to 
+# IDEA: Support arguments to
 #  - List contents of the recycle bin (with filters)
 #  - Purge files in the recycle bin (change time was updated to the time the file was deleted)
 #    Use this time to remove any files older than a specified number of days (default to 7)
@@ -19,8 +19,8 @@ __origArgs=$* # Capture all of the original arguments
 #  - Restore files from the recycle bin to their original location
 #    - If a file or folder exist at the original location, then should we restore with a 'restored', move the existing to a '.old', or prompt the user?
 #    - Should provide a CL arg to specify the desired action other than default
-#  - Compress files and folders in the recycle bin 
-#     - should run as a thread in the background 
+#  - Compress files and folders in the recycle bin
+#     - should run as a thread in the background
 #     - should provide some locking mechanism to either block if restoring while compression is in progress
 #       or compress to a temp file and if restored before completed, will need to stop and clean up temp file
 #  - Add ANSI color to dry-run output
@@ -32,6 +32,8 @@ VERBOSE=0
 DRYRUN=false # Not Implemented!
 
 
+# Print the usage text to the console
+#   includeAppInfo - Set to a non-empty value to include the author and version number in the output
 function print_usage() {
     includeAppInfo=${1}
     cat <<EOT
@@ -48,12 +50,12 @@ USAGE:
         dir     Return the path to the trash directory
         help    Show usage
         version Show version number
-        <path>  One or more paths to files and/or directories that should be moved to 
-                the trash.  Patterns supported by 'mv' are supported    
+        <path>  One or more paths to files and/or directories that should be moved to
+                the trash.  Patterns supported by 'mv' are supported
 
 EOT
 
-     if [[ ${includeAppInfo} ]]; then 
+     if [[ ${includeAppInfo} ]]; then
         cat <<EOT
     By: ${__Author}
     Version: ${__Version}
@@ -86,9 +88,9 @@ function log() {
 # function runCMD() {
 #     local cmd="$*"
 
-#     if [[ "${DRYRUN}" == "true" ]]; then 
+#     if [[ "${DRYRUN}" == "true" ]]; then
 #         echo "CMD: ${cmd}"
-#     else 
+#     else
 #         eval "${cmd}"
 #     fi
 # }
@@ -98,13 +100,13 @@ function log() {
 #  Set the variable `trash_directory`
 function set_trash_directory_path() {
     if [ -z "$XDG_DATA_HOME" ] ; then
-        xdg_trash_directory=$(realpath ~/.local/share/Trash/)
+        xdg_trash_directory=$(realpath -q ~/.local/share/Trash/)
     else
-        xdg_trash_directory=$(realpath "${XDG_DATA_HOME}/Trash/")
+        xdg_trash_directory=$(realpath -q "${XDG_DATA_HOME}/Trash/")
     fi
 
     gio_command_exists=0
-    
+
     # Check return code to determine if the gio commmand exist
     if eval command -v gio > /dev/null 2>&1; then
         gio_command_exists=1
@@ -117,7 +119,7 @@ function set_trash_directory_path() {
         trash_directory="${xdg_trash_directory}"
     else
         # Attempt to use a custom trash directory.
-        trash_directory=$(realpath ~/.recycle-bin)
+        trash_directory=$(realpath -q ~/.recycle-bin)
         if [[ -e "${trash_directory}" ]] ; then
             # It already exists.
             if [[ ! -d "${trash_directory}" ]] ; then
@@ -145,13 +147,13 @@ list_old_files() {
     local showOldOnly=${2:-false}
     local -r current_time=$(date +%s)
     local age_in_seconds=$((days * 24 * 60 * 60))
-    
+
     log 2 "Listing files in '${directory}'.  Those older than ${days} days are marked"
     printf "   %-30s %s\n" "Time Deleted" "File"
     echo "  ------------------------------------------------------------------------------"
     find "$directory" -mindepth 1 -maxdepth 1 -printf '%C@ %p\n' | while read ctime file_path; do
         local file_age=$((current_time - ${ctime%.*}))
-        
+
         # Mark directories with a trailing '/' char
         local type_mark=""
         if [ -d "${file_path}" ]; then
@@ -167,7 +169,7 @@ list_old_files() {
                 -v trashdir="${directory}" \
                 -v typemark="${type_mark}" \
                 -F "${FILE_DELIM}" \
-                '{ 
+                '{
                     sub(trashdir "/", "", $1); # Show relative path
                     printf color "  %-30s %s" typemark reset " " marksymbol "\n", $2, $1
                 }'
@@ -176,12 +178,15 @@ list_old_files() {
                 -v trashdir="${directory}" \
                 -v typemark="${type_mark}" \
                 -F "${FILE_DELIM}" \
-                '{ 
+                '{
                     sub(trashdir "/", "", $1); # Show relative path
                     printf "  %-30s %s" typemark "\n", $2, $1
                 }'
         fi
     done
+
+    echo
+    echo
 }
 
 # Function to delete files with ctime older than specified days
@@ -189,7 +194,7 @@ list_old_files() {
 delete_old_files() {
     local directory=${trash_directory}
     local days=${1:-$DEFAULT_AGE}
-    
+
     # If verbose is enabled, then print the file list
     if [ "${VERBOSE}" -gt 0 ] || [ "$DRYRUN" = true ]; then
         log 0 "The following files ${OLD_MARKER} will be purged:"
@@ -200,16 +205,13 @@ delete_old_files() {
     fi
 }
 
-# HACK: Test Code 
-# list_old_files 2
-# exit
 
 function trash_paths() {
     cmd_time="$(date '+%Y%m%d-%H%M%S.%3N')"
 
     # Deal with all filenames (a concept that covers names of both files and directories) given as arguments.
     for file in "$@" ; do
-        file_to_be_trashed=$(realpath -- "${file}")
+        file_to_be_trashed=$(realpath -q -- "${file}")
         file_basename=$(basename -- "${file_to_be_trashed}")
         if [[ ! -e ${file_to_be_trashed} ]] ; then
             log 1 "does not exist:   ${file_to_be_trashed}"
