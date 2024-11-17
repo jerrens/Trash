@@ -27,6 +27,24 @@ It allows management of files in the trash directory through various commands, o
 - **Compression Support**: (Concept) Compresses trash contents, supporting background execution and safe handling of active files.
 
 
+## Installation
+
+You can download the repo from github if you wish, but to pull down the script and start using it on you Linux machine, run the following commands:
+
+```shell
+curl -o /usr/local/sbin/trash https://raw.githubusercontent.com/jerrens/Trash/refs/heads/main/trash
+chmod +x /usr/local/sbin/trash
+```
+
+To confirm that `trash` is working, run one or more of the following commands:
+
+```shell
+trash version
+trash help
+trash dir
+```
+
+
 ## Default Settings
 
 - **Trash Directory Path**: Default paths include `$XDG_DATA_HOME/Trash` or a custom `~/.recycle-bin` if no XDG directory is found.
